@@ -328,6 +328,13 @@ static void dump_offline_logs_to_uart(void)
         aborted = true;
     }
 
+    /* IN DÒNG TIÊU Ð? CHU?N Ð? SCRIPT PYTHON / EXCEL Ð?C TR?C TI?P */
+    const char *header = "t_local_us,node_id,event,src,dst,seq,ttl_tx,ttl_rx,rssi,class,payload_len\r\n";
+    if (!aborted && !rtt_write_line_reliable(header, (unsigned)strlen(header)))
+    {
+        aborted = true;
+    }
+
     for (uint16_t i = 0; (i < m_offline_count) && !aborted; i++)
     {
         nrf_drv_wdt_channel_feed(m_channel_id);
