@@ -131,14 +131,8 @@ bool clearAllDisplayNodes;
 
 void uart_error_handle(app_uart_evt_t * p_event)
 {
-    if (p_event->evt_type == APP_UART_COMMUNICATION_ERROR)
-    {
-        APP_ERROR_HANDLER(p_event->data.error_communication);
-    }
-    else if (p_event->evt_type == APP_UART_FIFO_ERROR)
-    {
-        APP_ERROR_HANDLER(p_event->data.error_code);
-    }
+    /* B? qua toàn b? l?i UART, không g?i APP_ERROR_HANDLER */
+    (void)p_event;
 }
 
 dsm_local_unicast_address_t node_address;
@@ -160,17 +154,17 @@ void uart_init(void)
     uint32_t err_code;
     app_uart_comm_params_t const comm_params =
     {
-        .rx_pin_no    = RX_PIN_NUMBER,
+        .rx_pin_no    = UART_PIN_DISCONNECTED,
         .tx_pin_no    = TX_PIN_NUMBER,
         .rts_pin_no   = UART_PIN_DISCONNECTED,
         .cts_pin_no   = UART_PIN_DISCONNECTED,
         .flow_control = APP_UART_FLOW_CONTROL_DISABLED,
         .use_parity   = false,
-#if defined (UART_PRESENT)
+    #if defined (UART_PRESENT)
         .baud_rate    = NRF_UART_BAUDRATE_115200
-#else
+    #else
         .baud_rate    = NRF_UARTE_BAUDRATE_115200
-#endif
+    #endif
     };
 
     APP_UART_FIFO_INIT(&comm_params,
@@ -189,6 +183,7 @@ static char m_log_queue[LOG_QUEUE_SIZE][LOG_MSG_MAX_LEN];
 static volatile uint8_t m_log_head = 0;
 static volatile uint8_t m_log_tail = 0;
 static volatile bool m_logging_enabled = true;
+bool periodic_message_allowed = false;
 
 static void log_uart_mesh_event(const char* event, uint16_t src, uint16_t dst, 
                                 uint32_t seq, uint8_t ttl_tx, uint8_t ttl_rx, 
@@ -226,33 +221,53 @@ static void log_queue_flush(void)
 
 extern nrfx_wdt_channel_id m_channel_id;
 
-#define MAX_OFFLINE_RECORDS  1600
+#define MAX_OFFLINE_RECORDS  1800
 
-typedef struct {
+typedef struct __attribute__((packed)) {
     uint32_t t_us;
     uint16_t seq_alarm;
-    uint8_t  src_ttl;
+    uint16_t src;
+    uint8_t  ttl;
     int8_t   rssi;
 } offline_log_t;
 
 static offline_log_t m_offline_logs[MAX_OFFLINE_RECORDS];
 static volatile uint16_t m_offline_count = 0;
+static volatile uint16_t m_offline_dropped = 0;
 static volatile bool m_dump_requested = false;
 volatile uint8_t g_display_src = 0;
 
+static bool rtt_write_line_reliable(const char *p, unsigned len)
+{
+    uint32_t waited_ms = 0;
+    while (SEGGER_RTT_Write(0, p, len) != len)
+    {
+        nrf_drv_wdt_channel_feed(m_channel_id);
+        nrf_delay_ms(1);
+        if (++waited_ms >= 3000)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 void offline_log_push_tx(uint16_t seq, uint8_t ttl, bool is_alarm)
 {
-    if (!m_logging_enabled || m_offline_count >= MAX_OFFLINE_RECORDS)
+    if (!m_logging_enabled)
     {
         return;
     }
-
-    uint8_t node_id    = (uint8_t)(node_address.address_start & 0x0F);
-    uint8_t stored_ttl = (ttl > 0x0F) ? 0x0F : (ttl & 0x0F);
+    if (m_offline_count >= MAX_OFFLINE_RECORDS)
+    {
+        m_offline_dropped++;
+        return;
+    }
 
     m_offline_logs[m_offline_count].t_us        = get_local_time_us();
     m_offline_logs[m_offline_count].seq_alarm   = ((is_alarm ? 1 : 0) << 15) | (seq & 0x7FFF);
-    m_offline_logs[m_offline_count].src_ttl     = (node_id << 4) | stored_ttl;
+    m_offline_logs[m_offline_count].src         = (uint16_t)(node_address.address_start & 0xFFFF);
+    m_offline_logs[m_offline_count].ttl         = ttl;
     m_offline_logs[m_offline_count].rssi        = 127;
     m_offline_count++;
 }
@@ -276,16 +291,18 @@ void offline_log_push(uint16_t src, uint8_t ttl, int8_t rssi, uint16_t payload)
     }
     g_display_src = (uint8_t)(clean_src & 0xFF);
 
-    uint8_t stored_node_id = (clean_src > 0x0F) ? 0x0F : (uint8_t)(clean_src & 0x0F);
-    uint8_t stored_ttl     = (ttl > 0x0F) ? 0x0F : (ttl & 0x0F);
-
     if (m_offline_count < MAX_OFFLINE_RECORDS)
     {
         m_offline_logs[m_offline_count].t_us        = get_local_time_us();
         m_offline_logs[m_offline_count].seq_alarm   = (traffic_bit << 15) | raw_seq;
-        m_offline_logs[m_offline_count].src_ttl     = (stored_node_id << 4) | stored_ttl;
+        m_offline_logs[m_offline_count].src         = clean_src;
+        m_offline_logs[m_offline_count].ttl         = ttl;
         m_offline_logs[m_offline_count].rssi        = (rssi == 127) ? 126 : rssi;
         m_offline_count++;
+    }
+    else
+    {
+        m_offline_dropped++;
     }
 
     log_uart_mesh_event("RX", clean_src, node_address.address_start, 
@@ -296,21 +313,29 @@ void offline_log_push(uint16_t src, uint8_t ttl, int8_t rssi, uint16_t payload)
 static void dump_offline_logs_to_uart(void)
 {
     char buf[128];
+    bool aborted = false;
+
     m_logging_enabled = false;
+    periodic_message_allowed = false;
 
-    SEGGER_RTT_ConfigUpBuffer(0, NULL, NULL, 0, SEGGER_RTT_MODE_BLOCK_IF_FIFO_FULL);
+    SEGGER_RTT_ConfigUpBuffer(0, NULL, NULL, 0, SEGGER_RTT_MODE_NO_BLOCK_SKIP);
 
-    SEGGER_RTT_WriteString(0, "\r\n--- BAT DAU XA LOG CSV ---\r\n");
-    uart_puts("\r\n--- BAT DAU XA LOG CSV ---\r\n");
+    int len = snprintf(buf, sizeof(buf),
+                       "\r\n--- BAT DAU XA LOG CSV --- SO DONG: %u; BI TRAN BUFFER: %u ---\r\n",
+                       (unsigned)m_offline_count, (unsigned)m_offline_dropped);
+    if (len > 0 && !rtt_write_line_reliable(buf, (unsigned)len))
+    {
+        aborted = true;
+    }
 
-    for (uint16_t i = 0; i < m_offline_count; i++)
+    for (uint16_t i = 0; (i < m_offline_count) && !aborted; i++)
     {
         nrf_drv_wdt_channel_feed(m_channel_id);
 
         uint16_t seq       = m_offline_logs[i].seq_alarm & 0x7FFF;
         bool     is_alarm  = (m_offline_logs[i].seq_alarm >> 15) & 0x01;
-        uint16_t node_id   = (m_offline_logs[i].src_ttl >> 4) & 0x0F;
-        uint8_t  ttl_val   = m_offline_logs[i].src_ttl & 0x0F;
+        uint16_t node_id   = m_offline_logs[i].src;
+        uint8_t  ttl_val   = m_offline_logs[i].ttl;
 
         bool is_tx         = (m_offline_logs[i].rssi == 127);
         const char *evt_str = is_tx ? "TX" : "RX";
@@ -321,40 +346,35 @@ static void dump_offline_logs_to_uart(void)
         uint8_t  ttl_rx    = is_tx ? 0 : ttl_val;
         int8_t   real_rssi = is_tx ? 0 : m_offline_logs[i].rssi;
 
-        int len = snprintf(buf, sizeof(buf), 
-                           "%u,0x%04X,%s,0x%04X,0x%04X,%u,%u,%u,%d,%s,2\r\n",
-                           m_offline_logs[i].t_us,
-                           node_address.address_start & 0xFFFF,
-                           evt_str,
-                           src,
-                           dst,
-                           seq,
-                           ttl_tx,
-                           ttl_rx,
-                           real_rssi,
-                           (is_alarm ? "ALARM" : "TELEMETRY"));
+        len = snprintf(buf, sizeof(buf),
+                       "%u,0x%04X,%s,0x%04X,0x%04X,%u,%u,%u,%d,%s,2\r\n",
+                       m_offline_logs[i].t_us,
+                       node_address.address_start & 0xFFFF,
+                       evt_str,
+                       src,
+                       dst,
+                       seq,
+                       ttl_tx,
+                       ttl_rx,
+                       real_rssi,
+                       (is_alarm ? "ALARM" : "TELEMETRY"));
 
-        if (len > 0)
+        if (len > 0 && !rtt_write_line_reliable(buf, (unsigned)len))
         {
-            for (int ch_idx = 0; ch_idx < len; ch_idx++)
-            {
-                uint32_t retry = 500;
-                while ((app_uart_put(buf[ch_idx]) != NRF_SUCCESS) && (--retry > 0))
-                {
-                    nrf_delay_us(10);
-                }
-            }
-            SEGGER_RTT_Write(0, buf, (unsigned)len);
+            aborted = true;
         }
-        nrf_delay_ms(2);
     }
 
-    SEGGER_RTT_WriteString(0, "--- KET THUC XA LOG ---\r\n");
-    uart_puts("--- KET THUC XA LOG ---\r\n");
+    if (aborted)
+    {
+        SEGGER_RTT_WriteString(0, "\r\n[LOI] RTT chua mo hoac bi nghen! Du lieu van giu trong RAM, hay thu bam Nut 3 lai.\r\n");
+        return;
+    }
 
-    SEGGER_RTT_ConfigUpBuffer(0, NULL, NULL, 0, SEGGER_RTT_MODE_NO_BLOCK_SKIP);
+    (void)rtt_write_line_reliable("--- KET THUC XA LOG ---\r\n", 25);
 
     m_offline_count = 0;
+    m_offline_dropped = 0;
     m_logging_enabled = true;
 }
 
@@ -458,10 +478,17 @@ static void alarm_status_check(void)
     }
 }
 
+static uint16_t m_tx_packet_count = 0;
 static uint32_t m_global_seq = 0;
 
 static void publish_present_alarm_status(bool _statusSending)
 {
+    if (!_statusSending && m_tx_packet_count >= 1500)
+    {
+        periodic_message_allowed = false;
+        return;
+    }
+
     uint8_t client = 0;
     static generic_level_set_params_t set_params = {0}; 
     model_transition_t transition_params;
@@ -479,8 +506,8 @@ static void publish_present_alarm_status(bool _statusSending)
     }
 
     static uint8_t m_tid_counter = 0;
-    m_global_seq++;
-    uint16_t seq_15bit = (uint16_t)(m_global_seq & 0x7FFF);
+    uint32_t next_seq = m_global_seq + 1;
+    uint16_t seq_15bit = (uint16_t)(next_seq & 0x7FFF);
 
     uint16_t payload = (traffic_bit << 15) | seq_15bit;
 
@@ -495,6 +522,13 @@ static void publish_present_alarm_status(bool _statusSending)
 
     if (status == NRF_SUCCESS)
     {
+        m_global_seq = next_seq;
+
+        if (!_statusSending)
+        {
+            m_tx_packet_count++;
+        }
+
         uint16_t dst_addr = 0xFFFF;
         uint8_t current_ttl = 0;
 
@@ -512,12 +546,19 @@ static void publish_present_alarm_status(bool _statusSending)
     }
 }
 
-bool periodic_message_allowed;
 static void execute_periodic_message_sending(void)
 {
-    periodic_message_allowed = !periodic_message_allowed;
+    if (periodic_message_allowed)
+    {
+        periodic_message_allowed = false;
+    }
+    else
+    {
+        m_tx_packet_count = 0;
+        m_global_seq = 0;
+        periodic_message_allowed = true;
+    }
 }
-
 static void mesh_main_button_event_handler(uint32_t button_number)
 {
     button_number++;
@@ -814,7 +855,7 @@ static void all_parameters_initialization(void)
 {
     m_present_level = _normalStatus;       
     timerBCounter = 1;
-    periodic_message_allowed = true;
+    periodic_message_allowed = false;      
     aht10Available = true;
     _clientTemperature = 0;
     _clientHumidity = 0;
