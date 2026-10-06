@@ -65,9 +65,83 @@
 #include "nrf_uarte.h"
 #endif
 
+/* ========================================================================== */
+/* CAU HINH TN1 - ghi de bang Preprocessor Definitions, vi du:                */
+/*   EXP_NUM_MSGS=200 (phep thu moi)    FW_GIT_HASH="\"a1b2c3d\""             */
+/*                                                                            */
+/* HAI BOARD NAP CUNG MOT FIRMWARE. Vai tro duoc quyet dinh luc bam Nut 2:    */
+/*   board co Publish Address cua client model -> BO PHAT: bat dau run        */
+/*   board khong co Publish Address            -> BO THU : xoa log, san sang  */
+/* TTL, Publication Retransmit, Network Transmit Count dat bang nRF Mesh app. */
+/* Firmware chi DOC va kiem tra, KHONG ghi cau hinh mesh luc chay.            */
+/* Log di qua RTT: ghi vao RAM trong luc chay, bam Nut 3 de xa ra RTT.        */
+/* ========================================================================== */
+#ifndef EXP_ID
+#define EXP_ID                    1
+#endif
+#ifndef FW_GIT_HASH
+#define FW_GIT_HASH               "nohash"
+#endif
+#ifndef EXP_NUM_MSGS
+#define EXP_NUM_MSGS              1500   /* TN1 chinh thuc: 1500 goi/run. Phep thu moi: 200 */
+#endif
+#ifndef EXP_PERIOD_MS
+#define EXP_PERIOD_MS             1000   /* chi de ghi vao # CFG: chu ky that = nhip 1 giay cua vong lap main */
+#endif
+#ifndef EXP_TTL
+#define EXP_TTL                   0      /* 0xFF = khong kiem tra TTL */
+#endif
+#ifndef EXP_NET_TX_COUNT
+#define EXP_NET_TX_COUNT          1      /* chi de canh bao neu khac; dat bang nRF Mesh app */
+#endif
+#ifndef EXP_TX_POWER_DBM
+#define EXP_TX_POWER_DBM          0      /* chi de canh bao neu khac; phien ban nay KHONG ghi cong suat */
+#endif
+#ifndef EXP_SEND_UNACK
+#define EXP_SEND_UNACK            1      /* 1 = Set Unacknowledged (dung cho TN1). 0 = Set co ack nhu code cu (chi de chan doan) */
+#endif
+#ifndef EXP_READ_CFG
+#define EXP_READ_CFG              1      /* 1 = doc TTL/retransmit/net tx/cong suat/publish address. 0 = loai tru khi debug */
+#endif
+#ifndef EXP_ENABLE_TRIG
+#define EXP_ENABLE_TRIG           0      /* xung GPIO do tre. TN1 = 0 (khong do tre) */
+#endif
+#ifndef EXP_LIVE_LOG
+#define EXP_LIVE_LOG              0      /* 1 = in tung goi ra RTT/UART luc dang chay (lam cham). TN1 = 0 */
+#endif
+#ifndef EXP_ENABLE_ALARM_BUTTON
+#define EXP_ENABLE_ALARM_BUTTON   0      /* Nut 1 bat lop ALARM. TN1 = 0 */
+#endif
+#ifndef EXP_MAX_TX_FAIL
+#define EXP_MAX_TX_FAIL           30     /* so lan gui loi LIEN TIEP thi dung run */
+#endif
+#ifndef EXP_HALT_ON_FAULT
+#define EXP_HALT_ON_FAULT         1      /* 1: dung yen + in loi (debug). 0: tu reset */
+#endif
+#ifndef EXP_TRACE_STEPS
+#define EXP_TRACE_STEPS           1      /* in "# [STEP] ..." de khoanh vung FAULT. Dat 0 truoc khi do chinh thuc */
+#endif
+
+#if EXP_SEND_UNACK
+#define EXP_PAYLOAD_LEN           5      /* opcode 2 + level 2 + TID 1 (tai lieu TN1 ghi 16 byte: KHONG khop) */
+#else
+#define EXP_PAYLOAD_LEN           7      /* them transition time 1 + delay 1 */
+#endif
+
+#if EXP_TRACE_STEPS
+#define EXP_STEP(s)               SEGGER_RTT_WriteString(0, "# [STEP] " s "\r\n")
+#else
+#define EXP_STEP(s)               ((void)0)
+#endif
+
+#if EXP_READ_CFG
+#include "mesh_opt_core.h"
+#endif
+
 #define TRIG_PIN        11
 #define TRIG_WIDTH_US   200
 
+#if EXP_ENABLE_TRIG
 static inline void trig(uint8_t n)
 {
     for (uint8_t i = 0; i < n; i++)
@@ -78,6 +152,9 @@ static inline void trig(uint8_t n)
         nrf_delay_us(TRIG_WIDTH_US);
     }
 }
+#else
+#define trig(n)         ((void)0)
+#endif
 
 extern uint32_t m_secondCounter;
 
@@ -131,7 +208,7 @@ bool clearAllDisplayNodes;
 
 void uart_error_handle(app_uart_evt_t * p_event)
 {
-    /* B? qua toàn b? l?i UART, không g?i APP_ERROR_HANDLER */
+    /* B? qua to?n b? l?i UART, kh?ng g?i APP_ERROR_HANDLER */
     (void)p_event;
 }
 
@@ -189,6 +266,11 @@ static void log_uart_mesh_event(const char* event, uint16_t src, uint16_t dst,
                                 uint32_t seq, uint8_t ttl_tx, uint8_t ttl_rx, 
                                 int8_t rssi, const char* traffic_class, uint8_t len)
 {
+#if !EXP_LIVE_LOG
+    (void)event; (void)src; (void)dst; (void)seq; (void)ttl_tx; (void)ttl_rx;
+    (void)rssi; (void)traffic_class; (void)len;
+    return;
+#endif
     if (!m_logging_enabled)
     {
         return;
@@ -237,6 +319,27 @@ static volatile uint16_t m_offline_dropped = 0;
 static volatile bool m_dump_requested = false;
 volatile uint8_t g_display_src = 0;
 
+/* Trang thai run TN1 */
+static volatile bool     m_req_toggle     = false;   /* Nut 2: xu ly o vong lap main */
+static volatile bool     m_run_done       = false;   /* ISR dat khi du EXP_NUM_MSGS goi */
+static volatile bool     m_run_aborted    = false;   /* ISR dat khi gui loi lien tiep */
+static volatile bool     m_role_tx        = false;
+static volatile uint32_t m_tx_fail_total  = 0;
+static volatile uint32_t m_tx_fail_consec = 0;
+static volatile uint32_t m_last_err       = 0;
+static uint16_t          m_tx_dst         = 0xFFFF;
+static uint32_t          g_reset_reason   = 0;
+
+/* Anh chup cau hinh luc bat dau run (de ghi vao dong # CFG) */
+static uint8_t m_cfg_ttl_pub = 0xFF;
+static uint8_t m_cfg_rtx     = 0xFF;
+static uint8_t m_cfg_txcnt   = 0xFF;
+static int8_t  m_cfg_dbm     = 127;
+static int     m_cfg_srv_pub = -1;
+static int     m_cfg_cli_pub = -1;
+static char    m_cfg_buf[352];
+static char    m_line_buf[128];
+
 static bool rtt_write_line_reliable(const char *p, unsigned len)
 {
     uint32_t waited_ms = 0;
@@ -268,10 +371,11 @@ void offline_log_push_tx(uint16_t seq, uint8_t ttl, bool is_alarm)
     m_offline_logs[m_offline_count].seq_alarm   = ((is_alarm ? 1 : 0) << 15) | (seq & 0x7FFF);
     m_offline_logs[m_offline_count].src         = (uint16_t)(node_address.address_start & 0xFFFF);
     m_offline_logs[m_offline_count].ttl         = ttl;
-    m_offline_logs[m_offline_count].rssi        = 127;
+    m_offline_logs[m_offline_count].rssi        = 127;   /* 127 = danh dau dong TX */
     m_offline_count++;
 }
 
+/* Hook RX: app_level.c goi ham nay khi nhan goi. */
 void offline_log_push(uint16_t src, uint8_t ttl, int8_t rssi, uint16_t payload)
 {
     if (!m_logging_enabled)
@@ -279,7 +383,14 @@ void offline_log_push(uint16_t src, uint8_t ttl, int8_t rssi, uint16_t payload)
         return;
     }
 
-    trig(3); 
+    /* Bo qua ban tin do CHINH node nay phat roi quay nguoc vao server (loopback). */
+    uint16_t own = (uint16_t)(node_address.address_start & 0xFFFF);
+    if (src == own || src == (uint16_t)(own + 1))
+    {
+        return;
+    }
+
+    trig(3);
 
     uint16_t raw_seq     = payload & 0x7FFF;
     uint8_t  traffic_bit = (payload >> 15) & 0x01;
@@ -305,84 +416,9 @@ void offline_log_push(uint16_t src, uint8_t ttl, int8_t rssi, uint16_t payload)
         m_offline_dropped++;
     }
 
-    log_uart_mesh_event("RX", clean_src, node_address.address_start, 
-                        raw_seq, 0, ttl, rssi, 
-                        (traffic_bit ? "ALARM" : "TELEMETRY"), sizeof(payload));
-}
-
-static void dump_offline_logs_to_uart(void)
-{
-    char buf[128];
-    bool aborted = false;
-
-    m_logging_enabled = false;
-    periodic_message_allowed = false;
-
-    SEGGER_RTT_ConfigUpBuffer(0, NULL, NULL, 0, SEGGER_RTT_MODE_NO_BLOCK_SKIP);
-
-    int len = snprintf(buf, sizeof(buf),
-                       "\r\n--- BAT DAU XA LOG CSV --- SO DONG: %u; BI TRAN BUFFER: %u ---\r\n",
-                       (unsigned)m_offline_count, (unsigned)m_offline_dropped);
-    if (len > 0 && !rtt_write_line_reliable(buf, (unsigned)len))
-    {
-        aborted = true;
-    }
-
-    /* IN DÒNG TIÊU Ð? CHU?N Ð? SCRIPT PYTHON / EXCEL Ð?C TR?C TI?P */
-    const char *header = "t_local_us,node_id,event,src,dst,seq,ttl_tx,ttl_rx,rssi,class,payload_len\r\n";
-    if (!aborted && !rtt_write_line_reliable(header, (unsigned)strlen(header)))
-    {
-        aborted = true;
-    }
-
-    for (uint16_t i = 0; (i < m_offline_count) && !aborted; i++)
-    {
-        nrf_drv_wdt_channel_feed(m_channel_id);
-
-        uint16_t seq       = m_offline_logs[i].seq_alarm & 0x7FFF;
-        bool     is_alarm  = (m_offline_logs[i].seq_alarm >> 15) & 0x01;
-        uint16_t node_id   = m_offline_logs[i].src;
-        uint8_t  ttl_val   = m_offline_logs[i].ttl;
-
-        bool is_tx         = (m_offline_logs[i].rssi == 127);
-        const char *evt_str = is_tx ? "TX" : "RX";
-
-        uint16_t src       = is_tx ? (node_address.address_start & 0xFFFF) : node_id;
-        uint16_t dst       = is_tx ? 0xFFFF : (node_address.address_start & 0xFFFF);
-        uint8_t  ttl_tx    = is_tx ? ttl_val : 0;
-        uint8_t  ttl_rx    = is_tx ? 0 : ttl_val;
-        int8_t   real_rssi = is_tx ? 0 : m_offline_logs[i].rssi;
-
-        len = snprintf(buf, sizeof(buf),
-                       "%u,0x%04X,%s,0x%04X,0x%04X,%u,%u,%u,%d,%s,2\r\n",
-                       m_offline_logs[i].t_us,
-                       node_address.address_start & 0xFFFF,
-                       evt_str,
-                       src,
-                       dst,
-                       seq,
-                       ttl_tx,
-                       ttl_rx,
-                       real_rssi,
-                       (is_alarm ? "ALARM" : "TELEMETRY"));
-
-        if (len > 0 && !rtt_write_line_reliable(buf, (unsigned)len))
-        {
-            aborted = true;
-        }
-    }
-
-    if (aborted)
-    {
-        SEGGER_RTT_WriteString(0, "\r\n[LOI] RTT chua mo hoac bi nghen! Du lieu van giu trong RAM, hay thu bam Nut 3 lai.\r\n");
-        return;
-    }
-
-    (void)rtt_write_line_reliable("--- KET THUC XA LOG ---\r\n", 25);
-
-    m_offline_count = 0;
-    m_offline_dropped = 0;
-    m_logging_enabled = true;
+    log_uart_mesh_event("RX", clean_src, node_address.address_start,
+                        raw_seq, 0, ttl, rssi,
+                        (traffic_bit ? "ALARM" : "TELEMETRY"), EXP_PAYLOAD_LEN);
 }
 
 static void log_config_init(void)
@@ -485,28 +521,26 @@ static void alarm_status_check(void)
     }
 }
 
-static uint16_t m_tx_packet_count = 0;
+static volatile uint16_t m_tx_packet_count = 0;
 static uint32_t m_global_seq = 0;
 
+/* Goi tu ngat SWI3_EGU3 (giu nguyen co che cua code cu). KHONG in RTT nhieu o day. */
 static void publish_present_alarm_status(bool _statusSending)
 {
-    if (!_statusSending && m_tx_packet_count >= 1500)
+    if (!_statusSending && m_tx_packet_count >= EXP_NUM_MSGS)
     {
         periodic_message_allowed = false;
+        m_run_done = true;
         return;
     }
 
     uint8_t client = 0;
-    static generic_level_set_params_t set_params = {0}; 
-    model_transition_t transition_params;
-
-    transition_params.delay_ms = APP_LEVEL_DELAY_MS;
-    transition_params.transition_time_ms = APP_LEVEL_TRANSITION_TIME_MS;
+    static generic_level_set_params_t set_params = {0};
 
     const char *p_class = "TELEMETRY";
     uint16_t traffic_bit = 0;
 
-    if (_statusSending) 
+    if (_statusSending)
     {
         traffic_bit = 1;
         p_class = "ALARM";
@@ -521,51 +555,58 @@ static void publish_present_alarm_status(bool _statusSending)
     set_params.level = (int16_t)payload;
     set_params.tid   = m_tid_counter++;
 
-    (void)access_model_reliable_cancel(m_clients[client].model_handle);
-
     trig(1);
 
+#if EXP_SEND_UNACK
+    if (m_tx_packet_count < 3) { EXP_STEP("set_unack"); }
+    uint32_t status = generic_level_client_set_unack(&m_clients[client], &set_params, NULL, 0);
+#else
+    if (m_tx_packet_count < 3) { EXP_STEP("set_acked_diag"); }
+    model_transition_t transition_params;
+    transition_params.delay_ms = APP_LEVEL_DELAY_MS;
+    transition_params.transition_time_ms = APP_LEVEL_TRANSITION_TIME_MS;
+    (void)access_model_reliable_cancel(m_clients[client].model_handle);
     uint32_t status = generic_level_client_set(&m_clients[client], &set_params, &transition_params);
+#endif
 
     if (status == NRF_SUCCESS)
     {
         m_global_seq = next_seq;
+        m_tx_fail_consec = 0;
 
         if (!_statusSending)
         {
             m_tx_packet_count++;
         }
 
-        uint16_t dst_addr = 0xFFFF;
-        uint8_t current_ttl = 0;
-
+        uint8_t current_ttl = 0xFF;
         (void)access_model_publish_ttl_get(m_clients[client].model_handle, &current_ttl);
 
         offline_log_push_tx(seq_15bit, current_ttl, _statusSending);
 
-        log_uart_mesh_event("TX", node_address.address_start, dst_addr, 
-                            (uint32_t)seq_15bit, current_ttl, 0, 0, p_class, sizeof(payload));
-    }
-    else if (status != NRF_ERROR_NO_MEM && status != NRF_ERROR_BUSY && 
-             status != NRF_ERROR_INVALID_STATE && status != NRF_ERROR_INVALID_PARAM)
-    {
-        ERROR_CHECK(status);
-    }
-}
+        log_uart_mesh_event("TX", node_address.address_start, m_tx_dst,
+                            (uint32_t)seq_15bit, current_ttl, 0, 0, p_class, EXP_PAYLOAD_LEN);
 
-static void execute_periodic_message_sending(void)
-{
-    if (periodic_message_allowed)
-    {
-        periodic_message_allowed = false;
+        if (!_statusSending && m_tx_packet_count >= EXP_NUM_MSGS)
+        {
+            periodic_message_allowed = false;
+            m_run_done = true;
+        }
     }
     else
     {
-        m_tx_packet_count = 0;
-        m_global_seq = 0;
-        periodic_message_allowed = true;
+        /* Khong tang seq: lan sau gui lai cung seq. KHONG goi ERROR_CHECK trong ngat. */
+        m_tx_fail_total++;
+        m_tx_fail_consec++;
+        m_last_err = status;
+        if (m_tx_fail_consec >= EXP_MAX_TX_FAIL)
+        {
+            periodic_message_allowed = false;
+            m_run_aborted = true;
+        }
     }
 }
+
 static void mesh_main_button_event_handler(uint32_t button_number)
 {
     button_number++;
@@ -574,11 +615,13 @@ static void mesh_main_button_event_handler(uint32_t button_number)
     switch (button_number)
     {
         case 1:
+#if EXP_ENABLE_ALARM_BUTTON
             alarm_status_check();
             trigger_egu30_event();
+#endif
             break;
         case 2:
-            execute_periodic_message_sending();
+            m_req_toggle = true;           /* xu ly o vong lap main */
             break;
         case 3:
             m_dump_requested = true;
@@ -590,7 +633,6 @@ static void mesh_main_button_event_handler(uint32_t button_number)
             break;
     }
 }
-
 void bsp_event_handler(bsp_event_t event)
 {
     switch (event)
@@ -648,7 +690,7 @@ APP_LEVEL_SERVER_DEF(m_level_server_0,
                      app_level_server_transition_cb);
 
 /* ========================================================================== */
-/* KH?I X? LÝ NH?N GÓI MESH CHU?N HÓA CHO THÍ NGHI?M VÀ HI?N TH?             */
+/* KH?I X? L? NH?N G?I MESH CHU?N H?A CHO TH? NGHI?M V? HI?N TH?             */
 /* ========================================================================== */
 
 static void app_level_server_set_cb(const app_level_server_t * p_server, uint32_t present_level)
@@ -657,7 +699,6 @@ static void app_level_server_set_cb(const app_level_server_t * p_server, uint32_
     uint8_t  traffic_bit = (payload >> 15) & 0x01;
     uint16_t seq_num     = payload & 0x7FFF;
 
-    /* Chu?n hóa d?a ch? Element 1 v? Node ID chính d? hi?n th? */
     uint16_t raw_src = g_last_mesh_src_addr;
     uint16_t src_addr = raw_src;
     if (raw_src % 2 == 0 && raw_src > 1)
@@ -665,14 +706,17 @@ static void app_level_server_set_cb(const app_level_server_t * p_server, uint32_
         src_addr = raw_src - 1;
     }
 
-    /* 1. IN LOG DEBUG Ð?P M?T RA RTT VIEWER */
+#if EXP_LIVE_LOG
     SEGGER_RTT_printf(0, "[RX] Node: 0x%04X | %s | Seq: %u | RSSI: %d\r\n",
                       src_addr,
                       (traffic_bit == 1) ? "ALARM" : "TELEMETRY",
                       seq_num,
                       g_last_mesh_rssi);
+#else
+    (void)seq_num;
+#endif
 
-    /* 2. C?P NH?T GIAO DI?N MÀN HÌNH ST7789 */
+    /* Cap nhat man hinh ST7789 */
     uint32_t display_stat = (traffic_bit == 1) ? _fireAlarmStatus : _normalStatus;
     insert_node((uint8_t)(src_addr & 0xFF), display_stat, false);
 
@@ -690,7 +734,7 @@ static void app_level_server_transition_cb(const app_level_server_t * p_server,
                                            uint32_t target_level, 
                                            app_transition_type_t transition_type)
 {
-    /* Ð? TR?NG: Toàn b? vi?c ghi log dã hoàn t?t ? Access Layer */
+    /* ?? TR?NG: To?n b? vi?c ghi log d? ho?n t?t ? Access Layer */
 }
 
 static void app_model_init(void)
@@ -802,12 +846,23 @@ static void initialize(void)
     ERROR_CHECK(app_timer_init());
     hal_leds_init();
 
+#if EXP_ENABLE_TRIG
     nrf_gpio_cfg_output(TRIG_PIN);
     nrf_gpio_pin_clear(TRIG_PIN);
+#endif
 
     bool erase_bonds;
     buttons_leds_init(&erase_bonds);
     ble_stack_init();
+
+    {
+        uint32_t rr = 0;
+        if (sd_power_reset_reason_get(&rr) == NRF_SUCCESS)
+        {
+            g_reset_reason = rr;
+            (void)sd_power_reset_reason_clr(0xFFFFFFFFu);
+        }
+    }
 
 #if MESH_FEATURE_GATT_ENABLED
     gap_params_init();
@@ -899,29 +954,48 @@ static void egu_init(void)
     NVIC_EnableIRQ(SWI3_EGU3_IRQn);
 }
 
+/* Handler loi. ID theo app_error.h cua SDK: NRF_FAULT_ID_SDK_ERROR = 0x4001, NRF_FAULT_ID_SDK_ASSERT = 0x4002.
+ * Assert cua Mesh (NRF_MESH_ASSERT) khong co dong/file, chi co pc -> doi chieu pc voi file .map. */
 void app_error_fault_handler(uint32_t id, uint32_t pc, uint32_t info)
 {
-    error_info_t * p_info = (error_info_t *)info;
-    char err_buf[128];
+    static char err_buf[160];
+    const uint32_t ram_end = 0x20000000u + (NRF_FICR->INFO.RAM * 1024u);
+    bool info_ok = (info >= 0x20000000u) && ((info & 3u) == 0u) && ((info + 12u) <= ram_end);
 
-    if (p_info != NULL && id == NRF_FAULT_ID_SDK_ERROR)
+    if (id == NRF_FAULT_ID_SDK_ERROR && info_ok)
     {
-        snprintf(err_buf, sizeof(err_buf), 
-                 "\r\n[FAULT] Code: 0x%08X, File: %s, Line: %u\r\n", 
-                 (unsigned int)p_info->err_code, p_info->p_file_name, (unsigned int)p_info->line_num);
+        const error_info_t * e = (const error_info_t *)info;
+        snprintf(err_buf, sizeof(err_buf),
+                 "\r\n[FAULT] SDK_ERROR id=0x%08X pc=0x%08X err=0x%08X line=%u\r\n",
+                 (unsigned int)id, (unsigned int)pc,
+                 (unsigned int)e->err_code, (unsigned int)e->line_num);
+    }
+    else if (id == NRF_FAULT_ID_SDK_ASSERT && info_ok)
+    {
+        const assert_info_t * a = (const assert_info_t *)info;
+        snprintf(err_buf, sizeof(err_buf),
+                 "\r\n[FAULT] ASSERT id=0x%08X pc=0x%08X line=%u\r\n",
+                 (unsigned int)id, (unsigned int)pc, (unsigned int)a->line_num);
     }
     else
     {
-        snprintf(err_buf, sizeof(err_buf), 
-                 "\r\n[FAULT] ID: 0x%08X, PC: 0x%08X, INFO: 0x%08X\r\n", 
+        snprintf(err_buf, sizeof(err_buf),
+                 "\r\n[FAULT] id=0x%08X pc=0x%08X info=0x%08X\r\n",
                  (unsigned int)id, (unsigned int)pc, (unsigned int)info);
     }
     uart_puts(err_buf);
-    NRF_LOG_RAW_INFO("%s", err_buf);
-    
-    while (1);
-}
+    SEGGER_RTT_WriteString(0, err_buf);
 
+#if EXP_HALT_ON_FAULT
+    while (1)
+    {
+        nrf_drv_wdt_channel_feed(m_channel_id);
+    }
+#else
+    NVIC_SystemReset();
+    while (1) {}
+#endif
+}
 nrfx_wdt_channel_id m_channel_id;
 
 void wd_event_handle(void)
@@ -989,12 +1063,294 @@ void display_ClientStatus(void)
     }
 }
 
+/* ========================================================================== */
+/* TN1: dieu khien run, doc cau hinh, xa log. CHI goi tu vong lap main.       */
+/* ========================================================================== */
+#if EXP_READ_CFG
+/* Model chua co Publish Address: handle = DSM_HANDLE_INVALID -> khong duoc dua vao dsm_address_get. */
+static bool model_pub_dst_get(access_model_handle_t h, uint16_t * p_dst)
+{
+    dsm_handle_t dh = DSM_HANDLE_INVALID;
+    nrf_mesh_address_t a;
+    if (access_model_publish_address_get(h, &dh) == NRF_SUCCESS &&
+        dh != DSM_HANDLE_INVALID &&
+        dsm_address_get(dh, &a) == NRF_SUCCESS)
+    {
+        *p_dst = a.value;
+        return true;
+    }
+    return false;
+}
+#endif
+
+/* Chi DOC cau hinh, KHONG ghi flash. */
+static void exp_cfg_capture(void)
+{
+    m_cfg_ttl_pub = 0xFF;
+    m_cfg_rtx     = 0xFF;
+    m_cfg_txcnt   = 0xFF;
+    m_cfg_dbm     = 127;
+    m_cfg_srv_pub = -1;
+    m_cfg_cli_pub = -1;
+    m_tx_dst      = 0xFFFF;
+
+    if (!mesh_stack_is_device_provisioned())
+    {
+        return;
+    }
+
+#if EXP_READ_CFG
+    (void)access_model_publish_ttl_get(m_clients[0].model_handle, &m_cfg_ttl_pub);
+
+    access_publish_retransmit_t rtx = { .count = 0xFF, .interval_steps = 0 };   /* 0xFF = khong doc duoc */
+    (void)access_model_publish_retransmit_get(m_clients[0].model_handle, &rtx);
+    m_cfg_rtx = rtx.count;
+
+    EXP_STEP("opt_read");
+    mesh_opt_core_adv_t adv_r;
+    radio_tx_power_t pw;
+    if (mesh_opt_core_adv_get(CORE_TX_ROLE_ORIGINATOR, &adv_r) == NRF_SUCCESS)
+    {
+        m_cfg_txcnt = (uint8_t)adv_r.tx_count;
+    }
+    if (mesh_opt_core_tx_power_get(CORE_TX_ROLE_ORIGINATOR, &pw) == NRF_SUCCESS)
+    {
+        m_cfg_dbm = (int8_t)pw;
+    }
+
+    uint16_t dst = 0xFFFF;
+    m_cfg_srv_pub = model_pub_dst_get(m_level_server_0.server.model_handle, &dst) ? 1 : 0;   /* bo thu phai = 0 */
+    if (model_pub_dst_get(m_clients[0].model_handle, &dst))
+    {
+        m_cfg_cli_pub = 1;                                                                    /* bo phat phai = 1 */
+        m_tx_dst = dst;
+    }
+    else
+    {
+        m_cfg_cli_pub = 0;
+    }
+#endif
+}
+
+/* Dung ';' khong ',' de cong cu tach CSV giu nguyen dong nay. */
+static void exp_cfg_line(char * out, size_t n)
+{
+    snprintf(out, n,
+             "# CFG exp=%u;fw=%s;role=%s;num_msgs=%u;period_ms=%u;payload_len=%u;"
+             "ttl_cfg=%u;ttl_pub=%u;pub_rtx=%u;net_tx_cfg=%u;net_tx_now=%u;tx_dbm_cfg=%d;tx_dbm_now=%d;"
+             "opts=%s;srv_pub=%d;cli_pub=%d;cli_dst=0x%04X;tx_fail=%u;last_err=0x%08X;reset=0x%08X",
+             (unsigned)EXP_ID, FW_GIT_HASH, m_role_tx ? "TX" : "RX",
+             (unsigned)EXP_NUM_MSGS, (unsigned)EXP_PERIOD_MS, (unsigned)EXP_PAYLOAD_LEN,
+             (unsigned)EXP_TTL, (unsigned)m_cfg_ttl_pub, (unsigned)m_cfg_rtx,
+             (unsigned)EXP_NET_TX_COUNT, (unsigned)m_cfg_txcnt,
+             (int)EXP_TX_POWER_DBM, (int)m_cfg_dbm,
+#if EXP_READ_CFG
+             "read_only",
+#else
+             "not_read",
+#endif
+             m_cfg_srv_pub, m_cfg_cli_pub, (unsigned)m_tx_dst,
+             (unsigned)m_tx_fail_total, (unsigned)m_last_err, (unsigned)g_reset_reason);
+}
+
+static void exp_toggle_run(void)
+{
+    if (periodic_message_allowed)                 /* dang phat -> dung */
+    {
+        periodic_message_allowed = false;
+        SEGGER_RTT_WriteString(0, "# [INFO] Da dung phat.\r\n");
+        return;
+    }
+    if (!mesh_stack_is_device_provisioned())
+    {
+        SEGGER_RTT_WriteString(0, "# [LOI] Chua provision.\r\n");
+        return;
+    }
+    if (m_offline_count > 0)
+    {
+        SEGGER_RTT_printf(0, "# [LOI] Con %u dong chua xa! Bam Nut 3 de xa log truoc khi bat run moi.\r\n",
+                          (unsigned)m_offline_count);
+        return;
+    }
+
+    EXP_STEP("cfg_capture");
+    exp_cfg_capture();
+
+    /* Khong doc duoc cau hinh (EXP_READ_CFG=0) -> coi la bo phat nhu code cu. */
+    bool is_tx = (EXP_READ_CFG == 0) || (m_cfg_cli_pub == 1);
+
+    m_offline_dropped = 0;
+    m_logging_enabled = true;
+
+    if (!is_tx)
+    {
+        m_role_tx = false;
+        exp_cfg_line(m_cfg_buf, sizeof(m_cfg_buf));
+        SEGGER_RTT_WriteString(0, m_cfg_buf);
+        SEGGER_RTT_WriteString(0, "\r\n# [ACTION] BO THU: client model khong co Publish Address -> da xoa log RAM, san sang nhan.\r\n");
+        return;
+    }
+
+#if EXP_READ_CFG
+    /* Kiem tra (KHONG ghi): sai thi TU CHOI chay de du lieu khong bi lan. */
+    bool ttl_bad = (EXP_TTL != 0xFF) && (m_cfg_ttl_pub != EXP_TTL);
+    bool rtx_bad = (m_cfg_rtx != 0);
+    if (ttl_bad || rtx_bad)
+    {
+        SEGGER_RTT_printf(0, "# [LOI] Publish cua client sai: ttl=%u (can %u), retransmit=%u (can 0). "
+                             "Dat trong nRF Mesh app roi bam Nut 2 lai.\r\n",
+                          (unsigned)m_cfg_ttl_pub, (unsigned)EXP_TTL, (unsigned)m_cfg_rtx);
+        return;
+    }
+    if ((EXP_NET_TX_COUNT != 0xFF) && (m_cfg_txcnt != 0xFF) && (m_cfg_txcnt != EXP_NET_TX_COUNT))
+    {
+        SEGGER_RTT_printf(0, "# [CANH BAO] Network Transmit Count = %u, can %u. Dat bang Config Network Transmit trong app.\r\n",
+                          (unsigned)m_cfg_txcnt, (unsigned)EXP_NET_TX_COUNT);
+    }
+    if ((m_cfg_dbm != 127) && (m_cfg_dbm != (int8_t)EXP_TX_POWER_DBM))
+    {
+        SEGGER_RTT_printf(0, "# [CANH BAO] Cong suat phat doc duoc = %d dBm, can %d dBm.\r\n",
+                          (int)m_cfg_dbm, (int)EXP_TX_POWER_DBM);
+    }
+#endif
+
+    m_tx_packet_count = 0;
+    m_global_seq      = 0;
+    m_tx_fail_total   = 0;
+    m_tx_fail_consec  = 0;
+    m_last_err        = 0;
+    m_run_done        = false;
+    m_run_aborted     = false;
+    m_role_tx         = true;
+
+    exp_cfg_line(m_cfg_buf, sizeof(m_cfg_buf));
+    SEGGER_RTT_WriteString(0, m_cfg_buf);
+    SEGGER_RTT_WriteString(0, "\r\n");
+    SEGGER_RTT_printf(0, "# [ACTION] Bat dau run moi (muc tieu %u goi)\r\n", (unsigned)EXP_NUM_MSGS);
+    EXP_STEP("run_start");
+
+    periodic_message_allowed = true;              /* ISR bat dau gui o nhip 1 giay ke tiep */
+}
+
+static void exp_dump_log(void)
+{
+    bool aborted = false;
+    uint16_t n = m_offline_count;
+
+    m_logging_enabled = false;
+    periodic_message_allowed = false;
+
+    SEGGER_RTT_ConfigUpBuffer(0, NULL, NULL, 0, SEGGER_RTT_MODE_NO_BLOCK_SKIP);
+
+    exp_cfg_line(m_cfg_buf, sizeof(m_cfg_buf));
+    if (!rtt_write_line_reliable(m_cfg_buf, (unsigned)strlen(m_cfg_buf)) ||
+        !rtt_write_line_reliable("\r\n", 2))
+    {
+        aborted = true;
+    }
+
+    int len = snprintf(m_line_buf, sizeof(m_line_buf),
+                       "--- BAT DAU XA LOG CSV --- SO DONG: %u; BI TRAN BUFFER: %u ---\r\n",
+                       (unsigned)n, (unsigned)m_offline_dropped);
+    if (!aborted && len > 0 && !rtt_write_line_reliable(m_line_buf, (unsigned)len))
+    {
+        aborted = true;
+    }
+
+    static const char header[] =
+        "t_local_us,node_id,event,src,dst,seq,ttl_tx,ttl_rx,rssi,class,payload_len\r\n";
+    if (!aborted && !rtt_write_line_reliable(header, sizeof(header) - 1))
+    {
+        aborted = true;
+    }
+
+    uint16_t my_id = (uint16_t)(node_address.address_start & 0xFFFF);
+
+    for (uint16_t i = 0; (i < n) && !aborted; i++)
+    {
+        nrf_drv_wdt_channel_feed(m_channel_id);
+
+        uint16_t seq      = m_offline_logs[i].seq_alarm & 0x7FFF;
+        bool     is_alarm = (m_offline_logs[i].seq_alarm >> 15) & 0x01;
+        uint8_t  ttl_val  = m_offline_logs[i].ttl;
+        bool     is_tx    = (m_offline_logs[i].rssi == 127);
+
+        uint16_t src      = is_tx ? my_id : m_offline_logs[i].src;
+        uint16_t dst      = is_tx ? m_tx_dst : my_id;
+        uint8_t  ttl_tx   = is_tx ? ttl_val : 0;
+        uint8_t  ttl_rx   = is_tx ? 0 : ttl_val;
+        int      rssi_out = is_tx ? 0 : (int)m_offline_logs[i].rssi;
+
+        len = snprintf(m_line_buf, sizeof(m_line_buf),
+                       "%u,0x%04X,%s,0x%04X,0x%04X,%u,%u,%u,%d,%s,%u\r\n",
+                       (unsigned)m_offline_logs[i].t_us,
+                       (unsigned)my_id,
+                       is_tx ? "TX" : "RX",
+                       (unsigned)src,
+                       (unsigned)dst,
+                       (unsigned)seq,
+                       (unsigned)ttl_tx,
+                       (unsigned)ttl_rx,
+                       rssi_out,
+                       is_alarm ? "ALARM" : "TELEMETRY",
+                       (unsigned)EXP_PAYLOAD_LEN);
+
+        if (len > 0 && !rtt_write_line_reliable(m_line_buf, (unsigned)len))
+        {
+            aborted = true;
+        }
+    }
+
+    if (aborted)
+    {
+        SEGGER_RTT_WriteString(0, "\r\n[LOI] RTT chua mo hoac bi nghen! Du lieu van giu trong RAM, hay bam Nut 3 lai.\r\n");
+        return;
+    }
+
+    (void)rtt_write_line_reliable("--- KET THUC XA LOG ---\r\n", sizeof("--- KET THUC XA LOG ---\r\n") - 1);
+
+    m_offline_count = 0;
+    m_offline_dropped = 0;
+    m_logging_enabled = true;
+}
+
+static void exp_requests_service(void)
+{
+    if (m_req_toggle)
+    {
+        m_req_toggle = false;
+        exp_toggle_run();
+    }
+
+    if (m_run_done)
+    {
+        m_run_done = false;
+        SEGGER_RTT_printf(0, "# [INFO] Du %u goi. Cam J-Link + RTT Viewer roi bam Nut 3 de xa log.\r\n",
+                          (unsigned)EXP_NUM_MSGS);
+    }
+
+    if (m_run_aborted)
+    {
+        m_run_aborted = false;
+        SEGGER_RTT_printf(0, "# [LOI] Gui loi %u lan lien tiep (err=0x%08X). Dung run. "
+                             "0x5 = chua co publish address, 0x8 = chua provision.\r\n",
+                          (unsigned)EXP_MAX_TX_FAIL, (unsigned)m_last_err);
+    }
+
+    if (m_dump_requested)
+    {
+        SEGGER_RTT_WriteString(0, "[ACTION] Nhan Nut 3 -> Dang xa log...\r\n");
+        exp_dump_log();
+        m_dump_requested = false;
+    }
+}
+
 int main(void)
 {
     log_config_init();
     SEGGER_RTT_WriteString(0, "-> Qua log_config_init\r\n");
 
-    _getResetProvisionKey = checktoResetProvisioned(); // CHÚ Ý: Ch? này có while l?p!
+    _getResetProvisionKey = checktoResetProvisioned(); // CH? ?: Ch? n?y c? while l?p!
     SEGGER_RTT_WriteString(0, "-> Qua checktoResetProvisioned\r\n");
 
     all_parameters_initialization(); //
@@ -1064,24 +1420,16 @@ int main(void)
 
     for (;;)
     {
-        /* 1. X? lý x? log Offline khi nh?n Nút 3 */
-        if (m_dump_requested)
-        {
-            SEGGER_RTT_WriteString(0, "[ACTION] Nhan Nut 3 -> Dang xa log...\r\n");
-            dump_offline_logs_to_uart();
-            m_dump_requested = false;
-        }
+        exp_requests_service();
 
-        /* 2. X? hàng d?i UART n?u có d? li?u t?n d?ng */
-        log_queue_flush();
-
-        /* 3. X? lý s? ki?n m?i giây */
+        /* Xu ly su kien moi giay */
         if (m_second_changed)
         {
-            char rtt_buf[64];
-            snprintf(rtt_buf, sizeof(rtt_buf), "[TICK] Giay: %u | Prov: %s\r\n", 
-                     m_secondCounter, 
-                     mesh_stack_is_device_provisioned() ? "DA PROVISION" : "CHUA PROVISION");
+            char rtt_buf[96];
+            const char * mode = periodic_message_allowed ? "TX=RUN" : (m_role_tx ? "TX=IDLE" : "RX");
+            snprintf(rtt_buf, sizeof(rtt_buf), "[TICK] s=%u | %s sent=%u fail=%u | LOG=%u\r\n",
+                     (unsigned)m_secondCounter, mode,
+                     (unsigned)m_tx_packet_count, (unsigned)m_tx_fail_total, (unsigned)m_offline_count);
             SEGGER_RTT_WriteString(0, rtt_buf);
 
             glcd_integer_print(m_secondCounter);
@@ -1123,7 +1471,7 @@ int main(void)
                 refreshDisplayCounter = 0;
             }
 
-            /* N?u chua provision thì chua phát tin periodic */
+            /* N?u chua provision th? chua ph?t tin periodic */
             if (periodic_message_allowed && mesh_stack_is_device_provisioned())
             {
                 trigger_egu30_event();
@@ -1132,7 +1480,7 @@ int main(void)
             m_second_changed = false;
         }
 
-        /* 4. Nuôi Watchdog tránh reset h? th?ng */
+        /* 4. Nu?i Watchdog tr?nh reset h? th?ng */
         nrf_drv_wdt_channel_feed(m_channel_id);
 
         /* 5. Ch? s? ki?n (Ng? ti?t ki?m di?n) */
