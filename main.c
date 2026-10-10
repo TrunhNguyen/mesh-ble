@@ -83,7 +83,7 @@
 #define FW_GIT_HASH               "nohash"
 #endif
 #ifndef EXP_NUM_MSGS
-#define EXP_NUM_MSGS              1500   /* TN1 chinh thuc: 1500 goi/run. Phep thu moi: 200 */
+#define EXP_NUM_MSGS              200   /* TN1 chinh thuc: 1500 goi/run. Phep thu moi: 200 */
 #endif
 #ifndef EXP_PERIOD_MS
 #define EXP_PERIOD_MS             1000   /* chi de ghi vao # CFG: chu ky that = nhip 1 giay cua vong lap main */
