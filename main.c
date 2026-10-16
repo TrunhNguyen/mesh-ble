@@ -66,15 +66,7 @@
 #endif
 
 /* ========================================================================== */
-/* CAU HINH TN1 - ghi de bang Preprocessor Definitions, vi du:                */
-/*   EXP_NUM_MSGS=200 (phep thu moi)    FW_GIT_HASH="\"a1b2c3d\""             */
-/*                                                                            */
-/* HAI BOARD NAP CUNG MOT FIRMWARE. Vai tro duoc quyet dinh luc bam Nut 2:    */
-/*   board co Publish Address cua client model -> BO PHAT: bat dau run        */
-/*   board khong co Publish Address            -> BO THU : xoa log, san sang  */
-/* TTL, Publication Retransmit, Network Transmit Count dat bang nRF Mesh app. */
-/* Firmware chi DOC va kiem tra, KHONG ghi cau hinh mesh luc chay.            */
-/* Log di qua RTT: ghi vao RAM trong luc chay, bam Nut 3 de xa ra RTT.        */
+/* CAU HINH TN1 - ghi de bang Preprocessor Definitions                         */
 /* ========================================================================== */
 #ifndef EXP_ID
 #define EXP_ID                    1
@@ -86,46 +78,46 @@
 #define EXP_NUM_MSGS              200   /* TN1 chinh thuc: 1500 goi/run. Phep thu moi: 200 */
 #endif
 #ifndef EXP_PERIOD_MS
-#define EXP_PERIOD_MS             1000   /* chi de ghi vao # CFG: chu ky that = nhip 1 giay cua vong lap main */
+#define EXP_PERIOD_MS             1000  
 #endif
 #ifndef EXP_TTL
-#define EXP_TTL                   0      /* 0xFF = khong kiem tra TTL */
+#define EXP_TTL                   0     
 #endif
 #ifndef EXP_NET_TX_COUNT
-#define EXP_NET_TX_COUNT          1      /* chi de canh bao neu khac; dat bang nRF Mesh app */
+#define EXP_NET_TX_COUNT          1     
 #endif
 #ifndef EXP_TX_POWER_DBM
-#define EXP_TX_POWER_DBM          0      /* chi de canh bao neu khac; phien ban nay KHONG ghi cong suat */
+#define EXP_TX_POWER_DBM          0     
 #endif
 #ifndef EXP_SEND_UNACK
-#define EXP_SEND_UNACK            1      /* 1 = Set Unacknowledged (dung cho TN1). 0 = Set co ack nhu code cu (chi de chan doan) */
+#define EXP_SEND_UNACK            1     
 #endif
 #ifndef EXP_READ_CFG
-#define EXP_READ_CFG              1      /* 1 = doc TTL/retransmit/net tx/cong suat/publish address. 0 = loai tru khi debug */
+#define EXP_READ_CFG              1     
 #endif
 #ifndef EXP_ENABLE_TRIG
-#define EXP_ENABLE_TRIG           0      /* xung GPIO do tre. TN1 = 0 (khong do tre) */
+#define EXP_ENABLE_TRIG           0     
 #endif
 #ifndef EXP_LIVE_LOG
-#define EXP_LIVE_LOG              0      /* 1 = in tung goi ra RTT/UART luc dang chay (lam cham). TN1 = 0 */
+#define EXP_LIVE_LOG              0     
 #endif
 #ifndef EXP_ENABLE_ALARM_BUTTON
-#define EXP_ENABLE_ALARM_BUTTON   0      /* Nut 1 bat lop ALARM. TN1 = 0 */
+#define EXP_ENABLE_ALARM_BUTTON   0     
 #endif
 #ifndef EXP_MAX_TX_FAIL
-#define EXP_MAX_TX_FAIL           30     /* so lan gui loi LIEN TIEP thi dung run */
+#define EXP_MAX_TX_FAIL           30    
 #endif
 #ifndef EXP_HALT_ON_FAULT
-#define EXP_HALT_ON_FAULT         1      /* 1: dung yen + in loi (debug). 0: tu reset */
+#define EXP_HALT_ON_FAULT         1     
 #endif
 #ifndef EXP_TRACE_STEPS
-#define EXP_TRACE_STEPS           1      /* in "# [STEP] ..." de khoanh vung FAULT. Dat 0 truoc khi do chinh thuc */
+#define EXP_TRACE_STEPS           1     
 #endif
 
 #if EXP_SEND_UNACK
-#define EXP_PAYLOAD_LEN           5      /* opcode 2 + level 2 + TID 1 (tai lieu TN1 ghi 16 byte: KHONG khop) */
+#define EXP_PAYLOAD_LEN           5     
 #else
-#define EXP_PAYLOAD_LEN           7      /* them transition time 1 + delay 1 */
+#define EXP_PAYLOAD_LEN           7     
 #endif
 
 #if EXP_TRACE_STEPS
@@ -208,7 +200,6 @@ bool clearAllDisplayNodes;
 
 void uart_error_handle(app_uart_evt_t * p_event)
 {
-    /* B? qua to?n b? l?i UART, kh?ng g?i APP_ERROR_HANDLER */
     (void)p_event;
 }
 
@@ -287,7 +278,6 @@ static void log_uart_mesh_event(const char* event, uint16_t src, uint16_t dst,
                  t_us, my_id, event, src, dst, seq, ttl_tx, ttl_rx, rssi, traffic_class, len);
 
         SEGGER_RTT_WriteString(0, m_log_queue[m_log_head]);
-
         m_log_head = next_head;
     }
 }
@@ -319,10 +309,9 @@ static volatile uint16_t m_offline_dropped = 0;
 static volatile bool m_dump_requested = false;
 volatile uint8_t g_display_src = 0;
 
-/* Trang thai run TN1 */
-static volatile bool     m_req_toggle     = false;   /* Nut 2: xu ly o vong lap main */
-static volatile bool     m_run_done       = false;   /* ISR dat khi du EXP_NUM_MSGS goi */
-static volatile bool     m_run_aborted    = false;   /* ISR dat khi gui loi lien tiep */
+static volatile bool     m_req_toggle     = false;
+static volatile bool     m_run_done       = false;
+static volatile bool     m_run_aborted    = false;
 static volatile bool     m_role_tx        = false;
 static volatile uint32_t m_tx_fail_total  = 0;
 static volatile uint32_t m_tx_fail_consec = 0;
@@ -330,7 +319,6 @@ static volatile uint32_t m_last_err       = 0;
 static uint16_t          m_tx_dst         = 0xFFFF;
 static uint32_t          g_reset_reason   = 0;
 
-/* Anh chup cau hinh luc bat dau run (de ghi vao dong # CFG) */
 static uint8_t m_cfg_ttl_pub = 0xFF;
 static uint8_t m_cfg_rtx     = 0xFF;
 static uint8_t m_cfg_txcnt   = 0xFF;
@@ -371,11 +359,10 @@ void offline_log_push_tx(uint16_t seq, uint8_t ttl, bool is_alarm)
     m_offline_logs[m_offline_count].seq_alarm   = ((is_alarm ? 1 : 0) << 15) | (seq & 0x7FFF);
     m_offline_logs[m_offline_count].src         = (uint16_t)(node_address.address_start & 0xFFFF);
     m_offline_logs[m_offline_count].ttl         = ttl;
-    m_offline_logs[m_offline_count].rssi        = 127;   /* 127 = danh dau dong TX */
+    m_offline_logs[m_offline_count].rssi        = 127;
     m_offline_count++;
 }
 
-/* Hook RX: app_level.c goi ham nay khi nhan goi. */
 void offline_log_push(uint16_t src, uint8_t ttl, int8_t rssi, uint16_t payload)
 {
     if (!m_logging_enabled)
@@ -383,7 +370,6 @@ void offline_log_push(uint16_t src, uint8_t ttl, int8_t rssi, uint16_t payload)
         return;
     }
 
-    /* Bo qua ban tin do CHINH node nay phat roi quay nguoc vao server (loopback). */
     uint16_t own = (uint16_t)(node_address.address_start & 0xFFFF);
     if (src == own || src == (uint16_t)(own + 1))
     {
@@ -524,7 +510,6 @@ static void alarm_status_check(void)
 static volatile uint16_t m_tx_packet_count = 0;
 static uint32_t m_global_seq = 0;
 
-/* Goi tu ngat SWI3_EGU3 (giu nguyen co che cua code cu). KHONG in RTT nhieu o day. */
 static void publish_present_alarm_status(bool _statusSending)
 {
     if (!_statusSending && m_tx_packet_count >= EXP_NUM_MSGS)
@@ -595,7 +580,6 @@ static void publish_present_alarm_status(bool _statusSending)
     }
     else
     {
-        /* Khong tang seq: lan sau gui lai cung seq. KHONG goi ERROR_CHECK trong ngat. */
         m_tx_fail_total++;
         m_tx_fail_consec++;
         m_last_err = status;
@@ -621,7 +605,7 @@ static void mesh_main_button_event_handler(uint32_t button_number)
 #endif
             break;
         case 2:
-            m_req_toggle = true;           /* xu ly o vong lap main */
+            m_req_toggle = true;
             break;
         case 3:
             m_dump_requested = true;
@@ -633,6 +617,7 @@ static void mesh_main_button_event_handler(uint32_t button_number)
             break;
     }
 }
+
 void bsp_event_handler(bsp_event_t event)
 {
     switch (event)
@@ -689,10 +674,6 @@ APP_LEVEL_SERVER_DEF(m_level_server_0,
                      app_level_server_get_cb,
                      app_level_server_transition_cb);
 
-/* ========================================================================== */
-/* KH?I X? L? NH?N G?I MESH CHU?N H?A CHO TH? NGHI?M V? HI?N TH?             */
-/* ========================================================================== */
-
 static void app_level_server_set_cb(const app_level_server_t * p_server, uint32_t present_level)
 {
     uint16_t payload     = (uint16_t)present_level;
@@ -716,7 +697,6 @@ static void app_level_server_set_cb(const app_level_server_t * p_server, uint32_
     (void)seq_num;
 #endif
 
-    /* Cap nhat man hinh ST7789 */
     uint32_t display_stat = (traffic_bit == 1) ? _fireAlarmStatus : _normalStatus;
     insert_node((uint8_t)(src_addr & 0xFF), display_stat, false);
 
@@ -734,7 +714,7 @@ static void app_level_server_transition_cb(const app_level_server_t * p_server,
                                            uint32_t target_level, 
                                            app_transition_type_t transition_type)
 {
-    /* ?? TR?NG: To?n b? vi?c ghi log d? ho?n t?t ? Access Layer */
+    (void)p_server; (void)transition_time_ms; (void)target_level; (void)transition_type;
 }
 
 static void app_model_init(void)
@@ -954,8 +934,6 @@ static void egu_init(void)
     NVIC_EnableIRQ(SWI3_EGU3_IRQn);
 }
 
-/* Handler loi. ID theo app_error.h cua SDK: NRF_FAULT_ID_SDK_ERROR = 0x4001, NRF_FAULT_ID_SDK_ASSERT = 0x4002.
- * Assert cua Mesh (NRF_MESH_ASSERT) khong co dong/file, chi co pc -> doi chieu pc voi file .map. */
 void app_error_fault_handler(uint32_t id, uint32_t pc, uint32_t info)
 {
     static char err_buf[160];
@@ -996,6 +974,7 @@ void app_error_fault_handler(uint32_t id, uint32_t pc, uint32_t info)
     while (1) {}
 #endif
 }
+
 nrfx_wdt_channel_id m_channel_id;
 
 void wd_event_handle(void)
@@ -1063,11 +1042,7 @@ void display_ClientStatus(void)
     }
 }
 
-/* ========================================================================== */
-/* TN1: dieu khien run, doc cau hinh, xa log. CHI goi tu vong lap main.       */
-/* ========================================================================== */
 #if EXP_READ_CFG
-/* Model chua co Publish Address: handle = DSM_HANDLE_INVALID -> khong duoc dua vao dsm_address_get. */
 static bool model_pub_dst_get(access_model_handle_t h, uint16_t * p_dst)
 {
     dsm_handle_t dh = DSM_HANDLE_INVALID;
@@ -1083,7 +1058,6 @@ static bool model_pub_dst_get(access_model_handle_t h, uint16_t * p_dst)
 }
 #endif
 
-/* Chi DOC cau hinh, KHONG ghi flash. */
 static void exp_cfg_capture(void)
 {
     m_cfg_ttl_pub = 0xFF;
@@ -1102,9 +1076,16 @@ static void exp_cfg_capture(void)
 #if EXP_READ_CFG
     (void)access_model_publish_ttl_get(m_clients[0].model_handle, &m_cfg_ttl_pub);
 
-    access_publish_retransmit_t rtx = { .count = 0xFF, .interval_steps = 0 };   /* 0xFF = khong doc duoc */
-    (void)access_model_publish_retransmit_get(m_clients[0].model_handle, &rtx);
-    m_cfg_rtx = rtx.count;
+    /* Kh?c ph?c tri?t d? warning -Woverflow b?ng bi?n trung gian uint8_t thay vì gán tr?c ti?p 0xFF vào bit-field */
+    access_publish_retransmit_t rtx;
+    if (access_model_publish_retransmit_get(m_clients[0].model_handle, &rtx) == NRF_SUCCESS)
+    {
+        m_cfg_rtx = rtx.count;
+    }
+    else
+    {
+        m_cfg_rtx = 0xFF;
+    }
 
     EXP_STEP("opt_read");
     mesh_opt_core_adv_t adv_r;
@@ -1119,10 +1100,10 @@ static void exp_cfg_capture(void)
     }
 
     uint16_t dst = 0xFFFF;
-    m_cfg_srv_pub = model_pub_dst_get(m_level_server_0.server.model_handle, &dst) ? 1 : 0;   /* bo thu phai = 0 */
+    m_cfg_srv_pub = model_pub_dst_get(m_level_server_0.server.model_handle, &dst) ? 1 : 0;
     if (model_pub_dst_get(m_clients[0].model_handle, &dst))
     {
-        m_cfg_cli_pub = 1;                                                                    /* bo phat phai = 1 */
+        m_cfg_cli_pub = 1;
         m_tx_dst = dst;
     }
     else
@@ -1132,7 +1113,6 @@ static void exp_cfg_capture(void)
 #endif
 }
 
-/* Dung ';' khong ',' de cong cu tach CSV giu nguyen dong nay. */
 static void exp_cfg_line(char * out, size_t n)
 {
     snprintf(out, n,
@@ -1155,7 +1135,7 @@ static void exp_cfg_line(char * out, size_t n)
 
 static void exp_toggle_run(void)
 {
-    if (periodic_message_allowed)                 /* dang phat -> dung */
+    if (periodic_message_allowed)
     {
         periodic_message_allowed = false;
         SEGGER_RTT_WriteString(0, "# [INFO] Da dung phat.\r\n");
@@ -1176,7 +1156,6 @@ static void exp_toggle_run(void)
     EXP_STEP("cfg_capture");
     exp_cfg_capture();
 
-    /* Khong doc duoc cau hinh (EXP_READ_CFG=0) -> coi la bo phat nhu code cu. */
     bool is_tx = (EXP_READ_CFG == 0) || (m_cfg_cli_pub == 1);
 
     m_offline_dropped = 0;
@@ -1192,7 +1171,6 @@ static void exp_toggle_run(void)
     }
 
 #if EXP_READ_CFG
-    /* Kiem tra (KHONG ghi): sai thi TU CHOI chay de du lieu khong bi lan. */
     bool ttl_bad = (EXP_TTL != 0xFF) && (m_cfg_ttl_pub != EXP_TTL);
     bool rtx_bad = (m_cfg_rtx != 0);
     if (ttl_bad || rtx_bad)
@@ -1229,7 +1207,7 @@ static void exp_toggle_run(void)
     SEGGER_RTT_printf(0, "# [ACTION] Bat dau run moi (muc tieu %u goi)\r\n", (unsigned)EXP_NUM_MSGS);
     EXP_STEP("run_start");
 
-    periodic_message_allowed = true;              /* ISR bat dau gui o nhip 1 giay ke tiep */
+    periodic_message_allowed = true;
 }
 
 static void exp_dump_log(void)
@@ -1350,26 +1328,26 @@ int main(void)
     log_config_init();
     SEGGER_RTT_WriteString(0, "-> Qua log_config_init\r\n");
 
-    _getResetProvisionKey = checktoResetProvisioned(); // CH? ?: Ch? n?y c? while l?p!
+    _getResetProvisionKey = checktoResetProvisioned();
     SEGGER_RTT_WriteString(0, "-> Qua checktoResetProvisioned\r\n");
 
-    all_parameters_initialization(); //
-    uart_init(); //
+    all_parameters_initialization();
+    uart_init();
     SEGGER_RTT_WriteString(0, "-> Qua uart_init\r\n");
 
-    mq2_saadc_init(); //
+    mq2_saadc_init();
     SEGGER_RTT_WriteString(0, "-> Qua mq2_saadc_init\r\n");
 
-    glcd_display_initialization(); //
+    glcd_display_initialization();
     SEGGER_RTT_WriteString(0, "-> Qua glcd_init\r\n");
 
-    glcd_printText("Nodes:", 1, 40, TFT_WHITE, TFT_BLACK); //
+    glcd_printText("Nodes:", 1, 40, TFT_WHITE, TFT_BLACK);
     SEGGER_RTT_WriteString(0, "-> Qua glcd_printText\r\n");
 
-    initialize(); //
+    initialize();
     SEGGER_RTT_WriteString(0, "-> Qua initialize\r\n");
 
-    start(); //[cite: 2]
+    start();
     SEGGER_RTT_WriteString(0, "-> Qua start (Mesh da chay)\r\n");
 
     wdt_init();
@@ -1422,7 +1400,6 @@ int main(void)
     {
         exp_requests_service();
 
-        /* Xu ly su kien moi giay */
         if (m_second_changed)
         {
             char rtt_buf[96];
@@ -1471,7 +1448,6 @@ int main(void)
                 refreshDisplayCounter = 0;
             }
 
-            /* N?u chua provision th? chua ph?t tin periodic */
             if (periodic_message_allowed && mesh_stack_is_device_provisioned())
             {
                 trigger_egu30_event();
@@ -1480,10 +1456,7 @@ int main(void)
             m_second_changed = false;
         }
 
-        /* 4. Nu?i Watchdog tr?nh reset h? th?ng */
         nrf_drv_wdt_channel_feed(m_channel_id);
-
-        /* 5. Ch? s? ki?n (Ng? ti?t ki?m di?n) */
         (void)sd_app_evt_wait();
     }
 }
