@@ -72,7 +72,7 @@
 #define EXP_ID                    1
 #endif
 #ifndef FW_GIT_HASH
-#define FW_GIT_HASH               "nohash"
+#define FW_GIT_HASH               "0ba7b7"
 #endif
 #ifndef EXP_NUM_MSGS
 #define EXP_NUM_MSGS              200   /* TN1 chinh thuc: 1500 goi/run. Phep thu moi: 200 */
