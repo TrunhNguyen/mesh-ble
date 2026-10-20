@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 #include "boards.h"
 #include "app_timer.h"
@@ -66,16 +67,16 @@
 #endif
 
 /* ========================================================================== */
-/* CAU HINH TN1 - ghi de bang Preprocessor Definitions                         */
+/* C?U HÌNH MAC DINH (TN1) - GHI ÐÈ B?NG PREPROCESSOR DEFINITIONS             */
 /* ========================================================================== */
 #ifndef EXP_ID
-#define EXP_ID                    1
+#define EXP_ID                    1     
 #endif
 #ifndef FW_GIT_HASH
-#define FW_GIT_HASH               "0ba7b7"
+#define FW_GIT_HASH               "nohash"
 #endif
 #ifndef EXP_NUM_MSGS
-#define EXP_NUM_MSGS              200   /* TN1 chinh thuc: 1500 goi/run. Phep thu moi: 200 */
+#define EXP_NUM_MSGS              200   
 #endif
 #ifndef EXP_PERIOD_MS
 #define EXP_PERIOD_MS             1000  
@@ -104,14 +105,29 @@
 #ifndef EXP_ENABLE_ALARM_BUTTON
 #define EXP_ENABLE_ALARM_BUTTON   0     
 #endif
+#ifndef EXP_HOPS
+#define EXP_HOPS                  4     /* 1..4 ch?ng cho TN2 */
+#endif
+#ifndef EXP_DEBUG_RX_MAC
+#define EXP_DEBUG_RX_MAC          0     /* 1 = B?t in 5 MAC nh?n d?u tiên khi b?m Nút 2 */
+#endif
 #ifndef EXP_MAX_TX_FAIL
 #define EXP_MAX_TX_FAIL           30    
 #endif
 #ifndef EXP_HALT_ON_FAULT
 #define EXP_HALT_ON_FAULT         1     
 #endif
+#ifndef EXP_STRICT_CFG
+#define EXP_STRICT_CFG            0     
+#endif
+#ifndef EXP_RTT_KEYS
+#define EXP_RTT_KEYS              0     
+#endif
 #ifndef EXP_TRACE_STEPS
-#define EXP_TRACE_STEPS           1     
+#define EXP_TRACE_STEPS           0     
+#endif
+#ifndef EXP_HOP_WHITELIST
+#define EXP_HOP_WHITELIST         0     
 #endif
 
 #if EXP_SEND_UNACK
@@ -130,23 +146,113 @@
 #include "mesh_opt_core.h"
 #endif
 
-#define TRIG_PIN        11
-#define TRIG_WIDTH_US   200
-
-#if EXP_ENABLE_TRIG
-static inline void trig(uint8_t n)
-{
-    for (uint8_t i = 0; i < n; i++)
-    {
-        nrf_gpio_pin_set(TRIG_PIN);
-        nrf_delay_us(TRIG_WIDTH_US);
-        nrf_gpio_pin_clear(TRIG_PIN);
-        nrf_delay_us(TRIG_WIDTH_US);
-    }
-}
-#else
-#define trig(n)         ((void)0)
+#ifndef TRIG_PIN
+#define TRIG_PIN                  11    
 #endif
+#define TRIG_WIDTH_US             200
+
+/* Co ch? kích xung: b?t c?nh lên ngay tru?c khi x? lý, ch? 200 us và h? sau khi xong */
+void exp_trig_begin(void)
+{
+#if EXP_ENABLE_TRIG
+    nrf_gpio_pin_set(TRIG_PIN);
+#endif
+}
+
+void exp_trig_end(void)
+{
+#if EXP_ENABLE_TRIG
+    nrf_delay_us(TRIG_WIDTH_US);
+    nrf_gpio_pin_clear(TRIG_PIN);
+#endif
+}
+
+/* ========================================================================== */
+/* WHITELIST MAC THEO CHU?I TUY?N TÍNH (N4 -> N3 -> N2 -> N1 -> GW)           */
+/* ========================================================================== */
+typedef struct {
+    uint8_t addr[BLE_GAP_ADDR_LEN];
+} exp_node_mac_t;
+
+/* Ði?n byte theo dúng th? t? m?ng addr[0..5] in ra t?i RTT lúc kh?i d?ng */
+static const exp_node_mac_t EXP_TOPOLOGY_CHAIN[5] = {
+    { {0x00, 0x00, 0x00, 0x00, 0x00, 0x00} }, /* N4 (index 0) */
+    { {0x00, 0x00, 0x00, 0x00, 0x00, 0x00} }, /* N3 (index 1) */
+    { {0x00, 0x00, 0x00, 0x00, 0x00, 0x00} }, /* N2 (index 2) */
+    { {0x00, 0x00, 0x00, 0x00, 0x00, 0x00} }, /* N1 (index 3) */
+    { {0x00, 0x00, 0x00, 0x00, 0x00, 0x00} }, /* GW (index 4) */
+};
+
+static int8_t m_my_chain_index = -1;
+static ble_gap_addr_t m_my_ble_addr;
+
+void exp_chain_mac_init(void)
+{
+    (void)sd_ble_gap_addr_get(&m_my_ble_addr);
+
+    SEGGER_RTT_printf(0, "# [NODE_ADDR] MAC (UI):  %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+                      m_my_ble_addr.addr[5], m_my_ble_addr.addr[4], m_my_ble_addr.addr[3],
+                      m_my_ble_addr.addr[2], m_my_ble_addr.addr[1], m_my_ble_addr.addr[0]);
+
+    SEGGER_RTT_printf(0, "# [NODE_ADDR] ARRAY C:   { 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X }\r\n",
+                      m_my_ble_addr.addr[0], m_my_ble_addr.addr[1], m_my_ble_addr.addr[2],
+                      m_my_ble_addr.addr[3], m_my_ble_addr.addr[4], m_my_ble_addr.addr[5]);
+
+    m_my_chain_index = -1;
+    for (uint8_t i = 0; i < 5; i++)
+    {
+        if (memcmp(m_my_ble_addr.addr, EXP_TOPOLOGY_CHAIN[i].addr, BLE_GAP_ADDR_LEN) == 0)
+        {
+            m_my_chain_index = (int8_t)i;
+            break;
+        }
+    }
+
+#if EXP_HOP_WHITELIST
+    if (m_my_chain_index == -1)
+    {
+        SEGGER_RTT_WriteString(0, "# [LOI] MAC KHONG CO TRONG BANG CHUOI! TU CHOI chay run.\r\n");
+    }
+    else
+    {
+        SEGGER_RTT_printf(0, "# [INFO] Node index trong chuoi: %d\r\n", (int)m_my_chain_index);
+    }
+#endif
+}
+volatile uint8_t g_dbg_rx_mac_left = 0;
+bool exp_packet_allow(const uint8_t * p_adv_addr, uint8_t adv_type)
+{
+#if EXP_HOP_WHITELIST
+    if (adv_type != 0x2A)
+    {
+        return true;
+    }
+    if (m_my_chain_index <= 0)
+    {
+        return false; /* Node l? ho?c N4 (ngu?n phát, không nh?n) */
+    }
+
+    int pred;
+    if (m_my_chain_index == 4) 
+    { 
+        pred = EXP_HOPS - 1; /* GW luôn nghe node phát cu?i cùng dang b?t */
+    }
+    else if (m_my_chain_index < EXP_HOPS) 
+    { 
+        pred = m_my_chain_index - 1; /* Relay ch? nghe node d?ng li?n tru?c */
+    }
+    else 
+    { 
+        return false; /* Node n?m ngoài ph?m vi s? ch?ng c?a c?u hình này */
+    }
+
+    return (memcmp(p_adv_addr, EXP_TOPOLOGY_CHAIN[pred].addr, BLE_GAP_ADDR_LEN) == 0);
+#else
+    (void)p_adv_addr;
+    (void)adv_type;
+    return true;
+#endif
+}
 
 extern uint32_t m_secondCounter;
 
@@ -319,13 +425,15 @@ static volatile uint32_t m_last_err       = 0;
 static uint16_t          m_tx_dst         = 0xFFFF;
 static uint32_t          g_reset_reason   = 0;
 
-static uint8_t m_cfg_ttl_pub = 0xFF;
-static uint8_t m_cfg_rtx     = 0xFF;
-static uint8_t m_cfg_txcnt   = 0xFF;
-static int8_t  m_cfg_dbm     = 127;
-static int     m_cfg_srv_pub = -1;
-static int     m_cfg_cli_pub = -1;
-static char    m_cfg_buf[352];
+static uint8_t m_cfg_ttl_pub  = 0xFF;
+static uint8_t m_cfg_rtx      = 0xFF;
+static uint8_t m_cfg_txcnt    = 0xFF;
+static int8_t  m_cfg_dbm      = 127;
+static uint8_t m_cfg_ttl_eff  = 0xFF;   
+static uint8_t m_cfg_relay_tx = 0xFF;   
+static int     m_cfg_srv_pub  = -1;
+static int     m_cfg_cli_pub  = -1;
+static char    m_cfg_buf[384];
 static char    m_line_buf[128];
 
 static bool rtt_write_line_reliable(const char *p, unsigned len)
@@ -376,7 +484,8 @@ void offline_log_push(uint16_t src, uint8_t ttl, int8_t rssi, uint16_t payload)
         return;
     }
 
-    trig(3);
+    exp_trig_begin();
+    exp_trig_end(); /* Xung C tren node dich */
 
     uint16_t raw_seq     = payload & 0x7FFF;
     uint8_t  traffic_bit = (payload >> 15) & 0x01;
@@ -540,7 +649,8 @@ static void publish_present_alarm_status(bool _statusSending)
     set_params.level = (int16_t)payload;
     set_params.tid   = m_tid_counter++;
 
-    trig(1);
+    /* B?t xung A tru?c khi g?i, t?t sau khi g?i */
+    exp_trig_begin();
 
 #if EXP_SEND_UNACK
     if (m_tx_packet_count < 3) { EXP_STEP("set_unack"); }
@@ -554,6 +664,8 @@ static void publish_present_alarm_status(bool _statusSending)
     uint32_t status = generic_level_client_set(&m_clients[client], &set_params, &transition_params);
 #endif
 
+    exp_trig_end();
+
     if (status == NRF_SUCCESS)
     {
         m_global_seq = next_seq;
@@ -566,6 +678,10 @@ static void publish_present_alarm_status(bool _statusSending)
 
         uint8_t current_ttl = 0xFF;
         (void)access_model_publish_ttl_get(m_clients[client].model_handle, &current_ttl);
+        if (current_ttl == 0xFF) 
+        { 
+            current_ttl = access_default_ttl_get(); 
+        }
 
         offline_log_push_tx(seq_15bit, current_ttl, _statusSending);
 
@@ -617,6 +733,16 @@ static void mesh_main_button_event_handler(uint32_t button_number)
             break;
     }
 }
+
+#if EXP_RTT_KEYS
+static void exp_rtt_key_handler(int key)
+{
+    if (key >= '1' && key <= '4')
+    {
+        mesh_main_button_event_handler((uint32_t)(key - '1'));
+    }
+}
+#endif
 
 void bsp_event_handler(bsp_event_t event)
 {
@@ -835,6 +961,9 @@ static void initialize(void)
     buttons_leds_init(&erase_bonds);
     ble_stack_init();
 
+    /* Ð?c MAC và kh?i t?o ch? s? chu?i theo nguyên t?c Fail-Closed */
+    exp_chain_mac_init();
+
     {
         uint32_t rr = 0;
         if (sd_power_reset_reason_get(&rr) == NRF_SUCCESS)
@@ -853,6 +982,10 @@ static void initialize(void)
     hal_led_mask_set(BLUE_LED_pos | YELLOW_LED_pos, LED_MASK_STATE_OFF);
     hal_led_blink_ms(BLUE_LED_pos | YELLOW_LED_pos, LED_BLINK_INTERVAL_MS, LED_BLINK_CNT_PROV);    
     mesh_init();
+
+#if EXP_RTT_KEYS
+    rtt_input_enable(exp_rtt_key_handler, 100);
+#endif
 }
 
 static void start(void)
@@ -1060,13 +1193,15 @@ static bool model_pub_dst_get(access_model_handle_t h, uint16_t * p_dst)
 
 static void exp_cfg_capture(void)
 {
-    m_cfg_ttl_pub = 0xFF;
-    m_cfg_rtx     = 0xFF;
-    m_cfg_txcnt   = 0xFF;
-    m_cfg_dbm     = 127;
-    m_cfg_srv_pub = -1;
-    m_cfg_cli_pub = -1;
-    m_tx_dst      = 0xFFFF;
+    m_cfg_ttl_pub  = 0xFF;
+    m_cfg_rtx      = 0xFF;
+    m_cfg_txcnt    = 0xFF;
+    m_cfg_dbm      = 127;
+    m_cfg_ttl_eff  = 0xFF;
+    m_cfg_relay_tx = 0xFF;
+    m_cfg_srv_pub  = -1;
+    m_cfg_cli_pub  = -1;
+    m_tx_dst       = 0xFFFF;
 
     if (!mesh_stack_is_device_provisioned())
     {
@@ -1075,8 +1210,8 @@ static void exp_cfg_capture(void)
 
 #if EXP_READ_CFG
     (void)access_model_publish_ttl_get(m_clients[0].model_handle, &m_cfg_ttl_pub);
+    m_cfg_ttl_eff = (m_cfg_ttl_pub == 0xFF) ? access_default_ttl_get() : m_cfg_ttl_pub;
 
-    /* Kh?c ph?c tri?t d? warning -Woverflow b?ng bi?n trung gian uint8_t thay vì gán tr?c ti?p 0xFF vào bit-field */
     access_publish_retransmit_t rtx;
     if (access_model_publish_retransmit_get(m_clients[0].model_handle, &rtx) == NRF_SUCCESS)
     {
@@ -1099,6 +1234,12 @@ static void exp_cfg_capture(void)
         m_cfg_dbm = (int8_t)pw;
     }
 
+    mesh_opt_core_adv_t adv_rl;
+    if (mesh_opt_core_adv_get(CORE_TX_ROLE_RELAY, &adv_rl) == NRF_SUCCESS)
+    {
+        m_cfg_relay_tx = (uint8_t)adv_rl.tx_count;
+    }
+
     uint16_t dst = 0xFFFF;
     m_cfg_srv_pub = model_pub_dst_get(m_level_server_0.server.model_handle, &dst) ? 1 : 0;
     if (model_pub_dst_get(m_clients[0].model_handle, &dst))
@@ -1116,14 +1257,18 @@ static void exp_cfg_capture(void)
 static void exp_cfg_line(char * out, size_t n)
 {
     snprintf(out, n,
-             "# CFG exp=%u;fw=%s;role=%s;num_msgs=%u;period_ms=%u;payload_len=%u;"
-             "ttl_cfg=%u;ttl_pub=%u;pub_rtx=%u;net_tx_cfg=%u;net_tx_now=%u;tx_dbm_cfg=%d;tx_dbm_now=%d;"
+             "# CFG exp=%u;fw=%s;role=%s;num_msgs=%u;period_ms=%u;payload_len=%u;hops=%u;"
+             "ttl_cfg=%u;ttl_pub=%u;ttl_eff=%u;pub_rtx=%u;net_tx_cfg=%u;net_tx_now=%u;tx_dbm_cfg=%d;tx_dbm_now=%d;relay_tx_now=%u;"
+             "chain_idx=%d;mac=%02X%02X%02X%02X%02X%02X;"
              "opts=%s;srv_pub=%d;cli_pub=%d;cli_dst=0x%04X;tx_fail=%u;last_err=0x%08X;reset=0x%08X",
              (unsigned)EXP_ID, FW_GIT_HASH, m_role_tx ? "TX" : "RX",
-             (unsigned)EXP_NUM_MSGS, (unsigned)EXP_PERIOD_MS, (unsigned)EXP_PAYLOAD_LEN,
-             (unsigned)EXP_TTL, (unsigned)m_cfg_ttl_pub, (unsigned)m_cfg_rtx,
+             (unsigned)EXP_NUM_MSGS, (unsigned)EXP_PERIOD_MS, (unsigned)EXP_PAYLOAD_LEN, (unsigned)EXP_HOPS,
+             (unsigned)EXP_TTL, (unsigned)m_cfg_ttl_pub, (unsigned)m_cfg_ttl_eff, (unsigned)m_cfg_rtx,
              (unsigned)EXP_NET_TX_COUNT, (unsigned)m_cfg_txcnt,
-             (int)EXP_TX_POWER_DBM, (int)m_cfg_dbm,
+             (int)EXP_TX_POWER_DBM, (int)m_cfg_dbm, (unsigned)m_cfg_relay_tx,
+             (int)m_my_chain_index,
+             m_my_ble_addr.addr[5], m_my_ble_addr.addr[4], m_my_ble_addr.addr[3],
+             m_my_ble_addr.addr[2], m_my_ble_addr.addr[1], m_my_ble_addr.addr[0],
 #if EXP_READ_CFG
              "read_only",
 #else
@@ -1146,6 +1291,15 @@ static void exp_toggle_run(void)
         SEGGER_RTT_WriteString(0, "# [LOI] Chua provision.\r\n");
         return;
     }
+
+#if EXP_HOP_WHITELIST
+    if (m_my_chain_index == -1)
+    {
+        SEGGER_RTT_WriteString(0, "# [LOI] TU CHOI chay run: MAC chua duoc khai bao trong EXP_TOPOLOGY_CHAIN!\r\n");
+        return;
+    }
+#endif
+
     if (m_offline_count > 0)
     {
         SEGGER_RTT_printf(0, "# [LOI] Con %u dong chua xa! Bam Nut 3 de xa log truoc khi bat run moi.\r\n",
@@ -1164,26 +1318,33 @@ static void exp_toggle_run(void)
     if (!is_tx)
     {
         m_role_tx = false;
+        #if EXP_DEBUG_RX_MAC
+        g_dbg_rx_mac_left = 5; /* Cho phép in 5 gói ti?p theo ra RTT */
+        #endif
         exp_cfg_line(m_cfg_buf, sizeof(m_cfg_buf));
         SEGGER_RTT_WriteString(0, m_cfg_buf);
-        SEGGER_RTT_WriteString(0, "\r\n# [ACTION] BO THU: client model khong co Publish Address -> da xoa log RAM, san sang nhan.\r\n");
+        SEGGER_RTT_WriteString(0, "\r\n# [ACTION] BO THU: da san sang nhan.\r\n");
         return;
     }
 
 #if EXP_READ_CFG
-    bool ttl_bad = (EXP_TTL != 0xFF) && (m_cfg_ttl_pub != EXP_TTL);
+    bool ttl_bad = (EXP_TTL != 0xFF) && (m_cfg_ttl_eff != EXP_TTL);
     bool rtx_bad = (m_cfg_rtx != 0);
     if (ttl_bad || rtx_bad)
     {
         SEGGER_RTT_printf(0, "# [LOI] Publish cua client sai: ttl=%u (can %u), retransmit=%u (can 0). "
                              "Dat trong nRF Mesh app roi bam Nut 2 lai.\r\n",
-                          (unsigned)m_cfg_ttl_pub, (unsigned)EXP_TTL, (unsigned)m_cfg_rtx);
+                          (unsigned)m_cfg_ttl_eff, (unsigned)EXP_TTL, (unsigned)m_cfg_rtx);
         return;
     }
     if ((EXP_NET_TX_COUNT != 0xFF) && (m_cfg_txcnt != 0xFF) && (m_cfg_txcnt != EXP_NET_TX_COUNT))
     {
         SEGGER_RTT_printf(0, "# [CANH BAO] Network Transmit Count = %u, can %u. Dat bang Config Network Transmit trong app.\r\n",
                           (unsigned)m_cfg_txcnt, (unsigned)EXP_NET_TX_COUNT);
+#if EXP_STRICT_CFG
+        SEGGER_RTT_WriteString(0, "# [LOI] EXP_STRICT_CFG=1: sai Network Transmit Count -> TU CHOI chay.\r\n");
+        return;
+#endif
     }
     if ((m_cfg_dbm != 127) && (m_cfg_dbm != (int8_t)EXP_TX_POWER_DBM))
     {
